@@ -435,6 +435,10 @@ public class PyPiProxyFacet
     else {
       parsed = SimpleIndex.parseHtml(baseUrl, body);
     }
+    if (parsed.unparsedAnchors() > 0) {
+      log.warn("Could not parse {} of the anchors of the index of {}; their links are left as the remote sent them",
+          parsed.unparsedAnchors(), target.project());
+    }
     storeFileTable(target.project(), parsed.files());
     String contentType = target.json() ? INDEX_JSON : INDEX_HTML;
     Content rewritten = new Content(new BytesPayload(parsed.rewritten().getBytes(StandardCharsets.UTF_8), contentType));
@@ -516,6 +520,10 @@ public class PyPiProxyFacet
         body = new String(in.readAllBytes(), StandardCharsets.UTF_8);
       }
       SimpleIndex.Parsed parsed = SimpleIndex.parseHtml(uri.toString(), body);
+      if (parsed.unparsedAnchors() > 0) {
+        log.warn("Could not parse {} of the anchors of the index of {}; their links are left as the remote sent them",
+            parsed.unparsedAnchors(), project);
+      }
       storeFileTable(project, parsed.files());
       storeIndex(project, false, parsed.rewritten(), etagOf(response), lastModifiedOf(response));
       return parsed.files();
