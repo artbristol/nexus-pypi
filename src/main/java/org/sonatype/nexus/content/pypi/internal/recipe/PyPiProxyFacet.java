@@ -10,15 +10,26 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import javax.annotation.Nullable;
 
+import org.sonatype.nexus.common.io.InputStreamSupplier;
 import org.sonatype.nexus.content.pypi.PyPiContentFacet;
+import org.sonatype.nexus.repository.ETagHeaderUtils;
+import org.sonatype.nexus.repository.MissingBlobException;
 import org.sonatype.nexus.repository.cache.CacheController;
 import org.sonatype.nexus.repository.cache.CacheInfo;
 import org.sonatype.nexus.repository.content.facet.ContentProxyFacetSupport;
+import org.sonatype.nexus.repository.http.HttpMethods;
 import org.sonatype.nexus.repository.httpclient.HttpClientFacet;
 import org.sonatype.nexus.repository.httpclient.RemoteBlockedIOException;
 import org.sonatype.nexus.repository.pypi.PyPiFileEntry;
@@ -26,18 +37,24 @@ import org.sonatype.nexus.repository.pypi.PyPiPaths;
 import org.sonatype.nexus.repository.pypi.PyPiPaths.FileRef;
 import org.sonatype.nexus.repository.view.Content;
 import org.sonatype.nexus.repository.view.Context;
+import org.sonatype.nexus.repository.view.Payload;
 import org.sonatype.nexus.repository.view.payloads.BytesPayload;
+import org.sonatype.nexus.repository.view.payloads.StreamPayload;
 import org.sonatype.nexus.validation.ssrf.AntiSsrfService;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.net.HttpHeaders;
+import org.apache.http.Header;
+import org.apache.http.HttpEntity;
 import org.apache.http.HttpResponse;
 import org.apache.http.HttpStatus;
 import org.apache.http.client.HttpClient;
 import org.apache.http.client.methods.HttpGet;
 import org.apache.http.client.methods.HttpRequestBase;
+import org.apache.http.client.utils.DateUtils;
 import org.apache.http.client.utils.HttpClientUtils;
+import org.joda.time.DateTime;
 import jakarta.validation.ValidationException;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.config.ConfigurableBeanFactory;
@@ -50,6 +67,7 @@ import static org.sonatype.nexus.content.pypi.PyPiContentFacet.INDEX_KIND;
 import static org.sonatype.nexus.content.pypi.PyPiContentFacet.METADATA_KIND;
 import static org.sonatype.nexus.repository.pypi.internal.PyPiContentValidator.INDEX_HTML;
 import static org.sonatype.nexus.repository.pypi.internal.PyPiContentValidator.INDEX_JSON;
+import static org.sonatype.nexus.repository.view.ContentTypes.APPLICATION_OCTET_STREAM;
 
 /**
  * PyPI proxy facet.
@@ -59,6 +77,11 @@ import static org.sonatype.nexus.repository.pypi.internal.PyPiContentValidator.I
  * into a file table. A distribution file (or its {@code .metadata}, PEP 658/714) is fetched from the URL the table
  * gives, checked against the hash the index declared for it, and cached. Index pages and file tables are subject to
  * the metadata max age; files and metadata, which are content-addressed and immutable, to the content max age.
+ *
+ * A distribution file that is not cached yet is streamed to the client while it downloads (see
+ * {@link StreamingDownload}); it is stored as usual once it has been checked. The upstream validators of the index
+ * pages are kept with the rewritten pages, so that revalidation asks the remote with If-None-Match/If-Modified-Since
+ * instead of fetching them again.
  */
 @Component
 @Scope(ConfigurableBeanFactory.SCOPE_PROTOTYPE)
@@ -74,6 +97,13 @@ public class PyPiProxyFacet
   private final ObjectMapper objectMapper = new ObjectMapper();
 
   private AntiSsrfService antiSsrfService;
+
+  /**
+   * File downloads in progress, by asset path.
+   */
+  private final ConcurrentMap<String, CompletableFuture<StreamingDownload>> downloads = new ConcurrentHashMap<>();
+
+  private ExecutorService downloadExecutor;
 
   enum Kind
   {
@@ -135,6 +165,10 @@ public class PyPiProxyFacet
         return null;
       }
       setTarget(context, Target.file(ref, entry));
+      Content streamed = streamFile(context, ref, entry);
+      if (streamed != null) {
+        return streamed;
+      }
       return super.get(context);
     }
     Optional<FileRef> metadata = PyPiPaths.parseMetadata(path);
@@ -160,6 +194,211 @@ public class PyPiProxyFacet
       }
     }
     return null;
+  }
+
+  // Streaming of files that are not cached yet
+
+  /**
+   * Serves a distribution file that is not cached yet while it downloads, rather than after: wheels of large projects
+   * are many GB, and {@code pip} gives up after about 15 seconds without data. Concurrent requests for the same file
+   * share one upstream download, which completes and is cached even if the clients go away.
+   *
+   * @return {@code null} if the file cannot be streamed, to fall back to the regular proxy path
+   * @see StreamingDownload
+   */
+  @Nullable
+  private Content streamFile(final Context context, final FileRef file, final PyPiFileEntry entry) throws IOException {
+    if (HttpMethods.HEAD.equals(context.getRequest().getAction())) {
+      return null; // a HEAD must not download the file
+    }
+    if (cachedFile(context) != null) {
+      return null; // cached: the regular path serves it, and revalidates it when stale
+    }
+    StreamingDownload download = joinOrStartDownload(context, file, entry);
+    if (download == null) {
+      return null;
+    }
+    InputStreamSupplier readers = () -> {
+      InputStream in = download.openReader();
+      if (in != null) {
+        return in;
+      }
+      // finished between the lookup and now
+      Optional<Content> cached = content().get(file.assetPath());
+      if (cached.isEmpty()) {
+        throw new IOException("Download of " + file.assetPath() + " failed");
+      }
+      return cached.get().openInputStream();
+    };
+    Content streamed = new Content(new StreamPayload(readers, sizeOf(entry), APPLICATION_OCTET_STREAM));
+    if (download.etag() != null) {
+      streamed.getAttributes().set(Content.CONTENT_ETAG, download.etag());
+    }
+    if (download.lastModified() != null) {
+      streamed.getAttributes().set(Content.CONTENT_LAST_MODIFIED, download.lastModified());
+    }
+    return streamed;
+  }
+
+  /**
+   * The size to report for the file, as the index declared it; unknown if it declared none.
+   */
+  private static long sizeOf(final PyPiFileEntry entry) {
+    return entry.size() != null ? entry.size() : Payload.UNKNOWN_SIZE;
+  }
+
+  /**
+   * The cached file, or null if there is none; a blob that has gone missing counts as none, so the file is downloaded
+   * again, as the regular proxy path would.
+   */
+  @Nullable
+  private Content cachedFile(final Context context) throws IOException {
+    try {
+      return getCachedContent(context);
+    }
+    catch (MissingBlobException e) {
+      return null;
+    }
+  }
+
+  /**
+   * Joins the download of the file in progress, or starts one. The slot is taken before contacting upstream, so
+   * concurrent requests never open a second upstream connection; they wait for the first one's response instead.
+   *
+   * @return {@code null} if the download could not be started, to fall back to the regular proxy path
+   */
+  @Nullable
+  private StreamingDownload joinOrStartDownload(
+      final Context context,
+      final FileRef file,
+      final PyPiFileEntry entry) throws IOException
+  {
+    CompletableFuture<StreamingDownload> slot = new CompletableFuture<>();
+    CompletableFuture<StreamingDownload> existing = downloads.putIfAbsent(file.assetPath(), slot);
+    if (existing != null) {
+      return joinDownload(existing);
+    }
+    try {
+      if (cachedFile(context) != null) {
+        return null; // stored while the slot was being taken
+      }
+      StreamingDownload download = startDownload(context, file, entry, slot);
+      if (download == null) {
+        return null;
+      }
+      slot.complete(download);
+      download.awaitReadable();
+      return download;
+    }
+    catch (IOException | RuntimeException e) {
+      slot.completeExceptionally(e);
+      throw e;
+    }
+    finally {
+      downloads.remove(file.assetPath(), slot);
+      slot.complete(null); // a no-op unless the leader failed to complete it; joiners then use the regular path
+    }
+  }
+
+  @Nullable
+  private StreamingDownload joinDownload(final CompletableFuture<StreamingDownload> slot) throws IOException {
+    StreamingDownload download;
+    try {
+      download = slot.get();
+    }
+    catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new IOException("Interrupted while waiting for upstream", e);
+    }
+    catch (ExecutionException e) {
+      // the request that started it failed before any download began; the regular path handles that
+      return null;
+    }
+    if (download == null) {
+      return null;
+    }
+    download.awaitReadable();
+    return download;
+  }
+
+  /**
+   * Requests the file in the request thread, so upstream errors reach this client, and hands the body over to a
+   * background download.
+   *
+   * @return {@code null} if the remote did not answer 200, to fall back to the regular proxy path, which answers the
+   *      status the way it always does
+   */
+  @Nullable
+  private StreamingDownload startDownload(
+      final Context context,
+      final FileRef file,
+      final PyPiFileEntry entry,
+      final CompletableFuture<StreamingDownload> slot) throws IOException
+  {
+    HttpClient client = facet(HttpClientFacet.class).getHttpClient();
+    URI uri = URI.create(requireNonNull(entry.url()));
+    validateRemoteHost(uri);
+    HttpGet request = new HttpGet(uri);
+    HttpResponse response = execute(context, client, request);
+    int status = response.getStatusLine().getStatusCode();
+    if (status != HttpStatus.SC_OK) {
+      log.debug("Upstream answered {} for {}, not streaming", status, uri);
+      request.abort();
+      return null;
+    }
+
+    StreamingDownload download;
+    try {
+      download = new StreamingDownload(Files.createTempFile("pypi-", ".part"), file.assetPath(),
+          entry.sha256(), entry.size(), etagOf(response), lastModifiedOf(response));
+    }
+    catch (IOException e) {
+      request.abort();
+      throw e;
+    }
+    CacheInfo cacheInfo = getCacheController(context).current();
+    downloadExecutor.execute(() -> runDownload(file, download, request, response, cacheInfo, slot));
+    return download;
+  }
+
+  private void runDownload(
+      final FileRef file,
+      final StreamingDownload download,
+      final HttpGet request,
+      final HttpResponse response,
+      final CacheInfo cacheInfo,
+      final CompletableFuture<StreamingDownload> slot)
+  {
+    boolean complete = false;
+    try {
+      HttpEntity entity = response.getEntity();
+      if (entity == null) {
+        throw new IOException("Upstream answered " + request.getURI() + " without a body");
+      }
+      download.download(entity.getContent());
+      complete = true;
+      content().putFile(file, download.file(), APPLICATION_OCTET_STREAM, cacheInfo,
+          download.etag(), download.lastModified());
+      log.debug("Downloaded and stored {} in {}", file.assetPath(), getRepository().getName());
+    }
+    catch (Exception e) {
+      download.fail(e instanceof IOException io ? io : e);
+      log.warn("Download of {} into {} failed: {}", file.assetPath(), getRepository().getName(), e.toString());
+    }
+    finally {
+      downloads.remove(file.assetPath(), slot);
+      try {
+        download.delete();
+      }
+      catch (IOException e) {
+        log.warn("Could not delete {}: {}", download.file(), e.toString());
+      }
+      if (!complete) {
+        // closing would drain the rest of a possibly multi-GB body
+        request.abort();
+      }
+      HttpClientUtils.closeQuietly(response);
+    }
   }
 
   // Index
@@ -282,6 +521,36 @@ public class PyPiProxyFacet
     content().putAsset(PyPiPaths.indexAssetPath(project, json), INDEX_KIND, index);
   }
 
+  /**
+   * The upstream ETag of a response, unquoted, or null if it sent none. Some remotes send the header lower case.
+   */
+  @Nullable
+  private static String etagOf(final HttpResponse response) {
+    Header etagHeader = response.getLastHeader(HttpHeaders.ETAG);
+    if (etagHeader == null) {
+      etagHeader = response.getLastHeader("etag");
+    }
+    return etagHeader == null ? null : ETagHeaderUtils.extract(etagHeader.getValue());
+  }
+
+  /**
+   * The upstream Last-Modified of a response, or null if it sent none or sent one that cannot be parsed.
+   */
+  @Nullable
+  private DateTime lastModifiedOf(final HttpResponse response) {
+    Header header = response.getLastHeader(HttpHeaders.LAST_MODIFIED);
+    if (header == null) {
+      return null;
+    }
+    try {
+      return new DateTime(DateUtils.parseDate(header.getValue()).getTime());
+    }
+    catch (Exception e) { // NOSONAR the parser throws a private exception type
+      log.debug("Could not parse Last-Modified '{}' as a date", header.getValue());
+      return null;
+    }
+  }
+
   private CacheController metadataCacheController() {
     return cacheControllerHolder.getMetadataCacheController();
   }
@@ -325,6 +594,23 @@ public class PyPiProxyFacet
   @Override
   protected boolean shouldSkipStoreForHead() {
     return true;
+  }
+
+  @Override
+  protected void doStart() {
+    super.doStart();
+    String name = "pypi-download-" + getRepository().getName();
+    downloadExecutor = Executors.newCachedThreadPool(runnable -> {
+      Thread thread = new Thread(runnable, name);
+      thread.setDaemon(true);
+      return thread;
+    });
+  }
+
+  @Override
+  protected void doStop() throws Exception {
+    downloadExecutor.shutdownNow();
+    super.doStop();
   }
 
   @Autowired
