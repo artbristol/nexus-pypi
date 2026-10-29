@@ -14,9 +14,10 @@ import org.springframework.stereotype.Component;
 import static org.sonatype.nexus.repository.http.HttpStatus.PROXY_AUTHENTICATION_REQUIRED;
 
 /**
- * PyPI's auto-block policy. A 404 is what pypi.org answers for a missing project, so it says nothing about the
- * availability of the remote; auto-blocking on it would take the whole proxy down after a single typo. As with the
- * default policy, 407 and 5xx block the remote.
+ * PyPI's auto-block policy. The default policy blocks the remote on a 401, but pypi.org never demands authentication
+ * (a missing project is a 404), so a 401 can only come from a private index whose credentials are missing or wrong -
+ * a configuration problem that should surface as request failures, not take the whole proxy down until someone clears
+ * the block. As with the default policy, 407 and 5xx still block the remote.
  */
 @Component
 @Qualifier(PyPiFormat.NAME)
