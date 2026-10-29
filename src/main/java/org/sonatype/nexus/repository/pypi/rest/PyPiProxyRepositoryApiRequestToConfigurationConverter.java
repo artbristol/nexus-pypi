@@ -6,7 +6,9 @@
  */
 package org.sonatype.nexus.repository.pypi.rest;
 
+import org.sonatype.nexus.content.pypi.internal.recipe.PyPiProxyFacet;
 import org.sonatype.nexus.repository.config.Configuration;
+import org.sonatype.nexus.repository.pypi.PyPiPaths;
 import org.sonatype.nexus.repository.rest.api.ProxyRepositoryApiRequestToConfigurationConverter;
 import org.sonatype.nexus.repository.routing.RoutingRuleStore;
 
@@ -24,6 +26,10 @@ public class PyPiProxyRepositoryApiRequestToConfigurationConverter
 
   @Override
   public Configuration convert(final PyPiProxyRepositoryApiRequest request) {
-    return super.convert(request);
+    Configuration configuration = super.convert(request);
+    PyPiAttributes pypi = request.getPypi();
+    String indexPath = pypi != null && pypi.getIndexPath() != null ? pypi.getIndexPath() : PyPiPaths.DEFAULT_INDEX_PATH;
+    configuration.attributes(PyPiProxyFacet.CONFIG_KEY).set("indexPath", indexPath);
+    return configuration;
   }
 }

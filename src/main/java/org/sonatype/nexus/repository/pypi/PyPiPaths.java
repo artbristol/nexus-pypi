@@ -10,6 +10,8 @@ import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import javax.annotation.Nullable;
+
 import static java.util.Objects.requireNonNull;
 
 /**
@@ -22,8 +24,10 @@ import static java.util.Objects.requireNonNull;
  * </ul>
  * where {@code {project}} is the project name, normalised per PEP 503.
  *
- * The repository's remote URL is the Simple API root - the value of pip's {@code --index-url} - e.g.
- * {@code https://pypi.org/simple}. A project's index page is the remote URL's path plus {@code /{project}/}.
+ * The Simple API root - the value of pip's {@code --index-url} - is the repository's remote URL plus its remote index
+ * path, as the repository form of the UI has them: {@code https://pypi.org} and {@code /simple} (the default) for
+ * pypi.org, or a remote URL and an empty index path for an index served at the root of its remote. A project's index
+ * page is the root's path plus {@code /{project}/}.
  */
 public final class PyPiPaths
 {
@@ -36,6 +40,11 @@ public final class PyPiPaths
   public static final String META_PREFIX = "/.pypi/";
 
   public static final String METADATA_SUFFIX = ".metadata";
+
+  /**
+   * The remote index path of a repository that has none configured, as the UI defaults it.
+   */
+  public static final String DEFAULT_INDEX_PATH = "/simple";
 
   public static final String HTML_SUFFIX = "@html";
 
@@ -145,13 +154,31 @@ public final class PyPiPaths
 
   /**
    * The path of a project's index page, relative to the origin, e.g. {@code /simple/requests/} for a remote of
-   * {@code https://pypi.org/simple}. The Simple API root is the remote URL, so its path is the prefix of every page.
+   * {@code https://pypi.org} and the index path {@code /simple}: the remote URL's path, then the index path, then the
+   * project.
    */
-  public static String indexUpstreamPath(final String remotePath, final String project) {
-    String prefix = remotePath == null || remotePath.isEmpty() ? "/" : remotePath;
-    if (!prefix.endsWith("/")) {
-      prefix += "/";
+  public static String indexUpstreamPath(final String remotePath, final String indexPath, final String project) {
+    return withSlash(withSlash(remotePath) + strip(indexPath)) + project + "/";
+  }
+
+  private static String withSlash(@Nullable final String path) {
+    if (path == null || path.isEmpty()) {
+      return "/";
     }
-    return prefix + project + "/";
+    return path.endsWith("/") ? path : path + "/";
+  }
+
+  private static String strip(@Nullable final String path) {
+    if (path == null) {
+      return "";
+    }
+    String stripped = path;
+    while (stripped.startsWith("/")) {
+      stripped = stripped.substring(1);
+    }
+    while (stripped.endsWith("/")) {
+      stripped = stripped.substring(0, stripped.length() - 1);
+    }
+    return stripped;
   }
 }

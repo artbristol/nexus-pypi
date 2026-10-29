@@ -46,7 +46,7 @@ the format to be found. Database tables (`pypi_*`) are created at startup by the
 DAOs.
 
 The UI needs no changes: nexus-public already contains the repository form for `pypi-proxy`. The
-REST endpoint `/v1/repositories/pypi/proxy` is provided by this plugin.
+REST endpoint `/v1/repositories/pypi/proxy` is provided by this plugin; the form saves through it.
 
 ## Request handling
 
@@ -60,9 +60,12 @@ REST endpoint `/v1/repositories/pypi/proxy` is provided by this plugin.
 | `HEAD ...` | the above, without the body |
 
 `{project}` is the project name, normalised per PEP 503 (lower case, runs of `-_.` to `-`), so
-`Requests`, `requests` and `requests-2` all address the same page. The repository's remote URL is
-the Simple API root - the value of pip's `--index-url` - and a project's page is that root's path
-plus `/{project}/`.
+`Requests`, `requests` and `requests-2` all address the same page. The Simple API root - the value of
+pip's `--index-url` - is the repository's remote URL plus its remote index path (the `pypi.indexPath`
+attribute: `/simple`, the default, or empty), and a project's page is that root's path plus
+`/{project}/`. These are the fields of nexus-public's repository form, whose hints are
+`https://pypi.org` and `/simple`; it always sends the `pypi` section, and the REST API accepts it,
+validates it as the form does, and returns it for the form to read.
 
 Index requests go through the proxy machinery (cache, staleness, cooperation). A file request first
 resolves the file table (below), then serves the file from the cache or, if it is not cached yet,

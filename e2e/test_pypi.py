@@ -11,10 +11,11 @@ import re
 import subprocess
 import sys
 import time
+import uuid
 
 import pytest
 
-from conftest import http, sha256
+from conftest import Repository, http, sha256
 from relay import Fault
 
 PROJECT = "six"
@@ -150,6 +151,57 @@ def test_stale_index_is_revalidated_conditionally(repository, relay):
     status, _, third = http(repository.url + "/simple/%s/" % PROJECT, headers=JSON_ACCEPT)
     assert status == 200 and third == first
     assert relay.since(mark) == [], "an index within its renewed max age needs no upstream request"
+
+
+def test_index_path_defaults_to_simple(nexus, repository):
+    # the fixture's repository is created without a pypi section, its remote URL the root of the
+    # relay, as for https://pypi.org; the Simple API is under the default index path /simple
+    assert nexus.proxy(repository.name)["pypi"] == {"indexPath": "/simple"}
+    assert index_files(repository, JSON_ACCEPT)
+
+
+@pytest.fixture
+def make_repository(nexus, relay_allowed, anonymous_access):
+    """Creates PyPI proxy repositories with the given remote URL and options, and deletes them after the test."""
+    names = []
+
+    def make(remote_url, **options):
+        name = "e2e-%s" % uuid.uuid4().hex[:8]
+        nexus.create_proxy(name, remote_url, **options)
+        names.append(name)
+        return Repository(nexus, name)
+
+    yield make
+    for name in names:
+        nexus.delete_repository(name)
+
+
+def test_repository_created_as_the_ui_form_creates_it(nexus, relay, make_repository):
+    # the UI's repository form posts the remote URL as its hint gives it (https://pypi.org) and
+    # always a pypi section with the index path (/simple unless changed)
+    repository = make_repository(relay.base_url, index_path="/simple")
+    assert nexus.proxy(repository.name)["pypi"] == {"indexPath": "/simple"}
+    mark = relay.mark()
+    assert index_files(repository, HTML_ACCEPT)
+    assert [r.path for r in relay.since(mark)] == ["/simple/%s/" % PROJECT]
+
+
+def test_empty_index_path_serves_an_index_at_the_root_of_the_remote_url(nexus, relay, make_repository):
+    # an index served at the root of its URL (pypi.nvidia.com, pypi.fury.io/{user}/): the remote URL
+    # is the whole Simple API root and the index path is empty; the relay's /simple/ stands for one
+    repository = make_repository(relay.base_url + "simple", index_path="")
+    assert nexus.proxy(repository.name)["pypi"] == {"indexPath": ""}
+    mark = relay.mark()
+    files = index_files(repository, JSON_ACCEPT)
+    assert [r.path for r in relay.since(mark)] == ["/simple/%s/" % PROJECT]
+    filename = next(name for name in files if name.endswith(".whl"))
+    status, _, content = http(repository.url + "/simple/%s/%s" % (PROJECT, filename))
+    assert status == 200 and sha256(content) == files[filename]
+
+
+def test_index_paths_the_ui_does_not_allow_are_rejected(nexus, relay, make_repository):
+    with pytest.raises(AssertionError, match=" 400 "):
+        make_repository(relay.base_url, index_path="/pypi")
 
 
 def test_unknown_project_is_404_and_negatively_cached(repository, relay):

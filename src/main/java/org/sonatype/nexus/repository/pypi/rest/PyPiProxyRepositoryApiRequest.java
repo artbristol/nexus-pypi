@@ -27,14 +27,17 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 /**
  * Request to create or update a PyPI proxy repository.
  *
- * The repository's remote URL is the Simple API root - the value of pip's {@code --index-url} - e.g.
- * {@code https://pypi.org/simple}.
+ * The Simple API root - the value of pip's {@code --index-url} - is the remote URL plus the {@code indexPath} of the
+ * {@code pypi} section, which the repository forms of the UI send too: e.g. {@code https://pypi.org} and
+ * {@code /simple}, the default when there is no {@code pypi} section.
  */
 @JsonFilter(EditionVisibility.NAME)
 @JsonIgnoreProperties({"format", "type"})
 public class PyPiProxyRepositoryApiRequest
     extends ProxyRepositoryApiRequest
 {
+  private final PyPiAttributes pypi;
+
   @JsonCreator(mode = JsonCreator.Mode.PROPERTIES)
   @SuppressWarnings("squid:S00107") // suppress constructor parameter count
   public PyPiProxyRepositoryApiRequest(
@@ -47,8 +50,14 @@ public class PyPiProxyRepositoryApiRequest
       @JsonProperty("httpClient") final HttpClientAttributes httpClient,
       @JsonProperty("routingRuleName") @JsonAlias("routingRule") final String routingRule,
       @JsonProperty("replication") @JsonInclude(value = Include.NON_EMPTY,
-          content = Include.NON_NULL) final ReplicationAttributes replication)
+          content = Include.NON_NULL) final ReplicationAttributes replication,
+      @JsonProperty("pypi") final PyPiAttributes pypi)
   {
     super(name, PyPiFormat.NAME, online, storage, cleanup, proxy, negativeCache, httpClient, routingRule, replication);
+    this.pypi = pypi;
+  }
+
+  public PyPiAttributes getPypi() {
+    return pypi;
   }
 }

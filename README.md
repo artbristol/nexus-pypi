@@ -17,6 +17,7 @@ Each plugin release works with exactly one Nexus version:
 |---|---|
 | 0.1.0 | 3.97.2-02 |
 | 0.2.0 | 3.97.2-02 |
+| 0.3.0 | 3.97.2-02 |
 
 ## Building
 
@@ -42,20 +43,24 @@ The jar is `target/nexus-repository-pypi-<version>.jar`.
    ```
 
 3. Create a repository: *Settings → Repositories → Create repository → pypi (proxy)*, with remote
-   storage `https://pypi.org/simple`. Or use the REST API:
+   storage `https://pypi.org` and the remote index path left at `/simple`. Or use the REST API:
 
    ```sh
    curl -u admin -X POST -H 'Content-Type: application/json' \
      http://localhost:8081/service/rest/v1/repositories/pypi/proxy -d '{
        "name": "pypi-proxy", "online": true,
        "storage": {"blobStoreName": "default", "strictContentTypeValidation": true},
-       "proxy": {"remoteUrl": "https://pypi.org/simple", "contentMaxAge": 1440, "metadataMaxAge": 1440},
+       "proxy": {"remoteUrl": "https://pypi.org", "contentMaxAge": 1440, "metadataMaxAge": 1440},
+       "pypi": {"indexPath": "/simple"},
        "negativeCache": {"enabled": true, "timeToLive": 1440},
        "httpClient": {"blocked": false, "autoBlock": true}}'
    ```
 
-   The remote URL is the root of the [Simple API](https://peps.python.org/pep-0503/) - the value
-   of pip's `--index-url`. The repository proxies that index and every file it names.
+   The remote URL plus the index path is the root of the
+   [Simple API](https://peps.python.org/pep-0503/) - the value of pip's `--index-url`. The index
+   path is `/simple` (the default) for pypi.org and the indexes laid out like it, or empty for an
+   index served at the root of its URL, such as `https://pypi.nvidia.com`. The repository proxies
+   that index and every file it names.
 
 4. For a private index that needs credentials, add them to the repository as HTTP
    authentication. Everything those credentials can read becomes readable by anyone who can read
