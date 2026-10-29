@@ -173,8 +173,9 @@ the suite polite and gives the tests something to assert on:
 
 * requests are at least 0.25 s apart, identified by a User-Agent pointing at this project, and
   limited to 400 requests and 100 MB per run; a 429 from pypi.org stops the run;
-* only the tiny project `six` is used; a full run makes a few dozen requests and transfers a few
-  MB;
+* only small projects are used: the tiny `six`, plus the one streaming test's `cryptography` wheel
+  (~5 MB); a full run makes a few dozen requests and transfers around ten MB, far within the budget
+  above;
 * the Simple index names its files by absolute URLs on the file host
   (`files.pythonhosted.org`); the relay rewrites them to a prefix on itself (keeping any
   `#sha256=...` fragment a fragment), so the files and their `.metadata` are downloaded through,

@@ -67,3 +67,22 @@ def test_corrupted_index_is_not_cached(repository, relay):
         "a truncated index is not a valid PEP 691 index and is not served"
     status, _, body = http(repository.url + "/simple/%s/" % PROJECT, headers=JSON_ACCEPT)
     assert status == 200 and json.loads(body)["files"], "the clean retry is served"
+
+
+def test_failed_file_table_fetch_is_not_answered_404_or_cached(repository, relay):
+    # a file request that must build the file table fetches the index itself; if that fetch fails
+    # with anything but 404, the file request is an upstream error (503), not a missing file (404),
+    # and nothing is negatively cached, so a clean retry succeeds
+    _, _, body = http(relay.base_url + "simple/%s/" % PROJECT, headers=JSON_ACCEPT)
+    wheel = next(f for f in json.loads(body)["files"] if f["filename"].endswith(".whl"))
+    filename, expected_sha = wheel["filename"], wheel["hashes"]["sha256"].lower()
+
+    relay.inject(Fault(status=500), times=1, path=r"/simple/%s/" % PROJECT)
+    status, _, _ = http(repository.url + "/simple/%s/%s" % (PROJECT, filename))
+    assert status == 503, "the failed table fetch is an upstream error (503), not a missing file"
+
+    status, _, body = http(repository.url + "/simple/%s/" % PROJECT, headers=JSON_ACCEPT)
+    assert status == 200 and json.loads(body)["files"], "the index is served once the fault is gone"
+    status, _, content = http(repository.url + "/simple/%s/%s" % (PROJECT, filename))
+    assert status == 200 and sha256(content) == expected_sha, \
+        "the file request succeeds after a clean index fetch: the failure was not negatively cached"

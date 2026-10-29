@@ -67,6 +67,7 @@ class Request:
     file: bool       # a distribution file, fetched through the relay's file prefix
     status: int = 0
     auth: bool = False  # sent with an Authorization header
+    conditional: bool = False  # sent with an If-None-Match header
 
 
 class Relay:
@@ -201,7 +202,8 @@ class Relay:
                     target = UPSTREAM + self.path
                 parsed = urllib.parse.urlsplit(target)
                 request = Request(self.command, parsed.path + ("?" + parsed.query if parsed.query else ""),
-                                  is_file, auth=self.headers.get("Authorization") is not None)
+                                  is_file, auth=self.headers.get("Authorization") is not None,
+                                  conditional=self.headers.get("If-None-Match") is not None)
                 body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
                 try:
                     relay._account(request)

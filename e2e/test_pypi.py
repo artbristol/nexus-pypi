@@ -2,15 +2,20 @@
 The proxy against the real pypi.org, without faults: whatever a client gets through Nexus must
 match what pypi.org says, and what Nexus has cached must not need pypi.org again.
 
-All repositories used are tiny (the project `six`); the whole module downloads a few MB.
+All repositories used are tiny (the project `six`); the whole module downloads a few MB, except
+the one streaming test, which installs `cryptography` (~5 MB) to have a file big enough to stream.
 """
 
 import json
 import re
 import subprocess
 import sys
+import time
+
+import pytest
 
 from conftest import http, sha256
+from relay import Fault
 
 PROJECT = "six"
 JSON_ACCEPT = {"Accept": "application/vnd.pypi.simple.v1+json"}
@@ -129,6 +134,24 @@ def test_head_reports_the_file_without_downloading_it_again(repository, relay):
     assert relay.since(mark, file=True) == [], "a HEAD must not download the file"
 
 
+@pytest.mark.repo(metadata_max_age=1)
+def test_stale_index_is_revalidated_conditionally(repository, relay):
+    # the metadata max age is one minute; past it the index is revalidated with the validators the
+    # upstream sent, not fetched again, and the max age starts over once it is revalidated
+    _, _, first = http(repository.url + "/simple/%s/" % PROJECT, headers=JSON_ACCEPT)
+    mark = relay.mark()
+    time.sleep(65)
+    status, _, second = http(repository.url + "/simple/%s/" % PROJECT, headers=JSON_ACCEPT)
+    assert status == 200 and second == first, "the revalidated index is served unchanged"
+    [request] = relay.since(mark, path=r"/simple/%s/" % PROJECT)
+    assert request.conditional, "the revalidation asked with If-None-Match"
+
+    mark = relay.mark()
+    status, _, third = http(repository.url + "/simple/%s/" % PROJECT, headers=JSON_ACCEPT)
+    assert status == 200 and third == first
+    assert relay.since(mark) == [], "an index within its renewed max age needs no upstream request"
+
+
 def test_unknown_project_is_404_and_negatively_cached(repository, relay):
     path = "/simple/this-project-does-not-exist-e2e-xyz/"
     assert http(repository.url + path)[0] == 404
@@ -158,3 +181,36 @@ def test_pip_installs_through_the_proxy(repository, relay, tmp_path):
     assert any(target.glob("*.dist-info")), "%s was installed" % PROJECT
     assert [r for r in relay.since(mark) if not r.file], \
         "pip only fetched the index and the file, no stray requests"
+
+
+def test_uncached_file_streams_to_the_client_while_it_downloads(repository, relay, tmp_path):
+    # with a slow upstream, an uncached file streams to the client as it downloads: pip reads
+    # steadily and never gives up or re-requests, where a download-then-serve proxy would leave it
+    # waiting past its read timeout
+    _, _, body = http(relay.base_url + "simple/cryptography/", headers=JSON_ACCEPT)
+    files = json.loads(body)["files"]
+    sizes = {f["filename"]: f.get("size") or 0 for f in files}
+    newest = max((f for f in files if f["filename"].endswith("cp39-abi3-manylinux_2_28_x86_64.whl")),
+                 key=lambda f: f.get("upload-time") or "")
+    assert (newest.get("size") or 0) > 1_000_000, "a wheel big enough to demonstrate streaming"
+
+    target = tmp_path / "site"
+    target.mkdir()
+    relay.inject(Fault(bytes_per_second=200_000), times=2, file=True)
+    mark = relay.mark()
+    started = time.monotonic()
+    result = subprocess.run(
+        [sys.executable, "-m", "pip", "install", "--quiet", "--no-input", "--no-cache-dir",
+         "--index-url", repository.url + "/simple", "--target", str(target), "--no-deps",
+         "cryptography"],
+        capture_output=True, text=True, timeout=180)
+    elapsed = time.monotonic() - started
+    assert result.returncode == 0, result.stderr
+    # the throttle limits the relay to 200 KB/s, so the ~5 MB wheel takes ~25 s to arrive: pip
+    # waited past its default read timeout of 15 s without giving up, because bytes kept arriving
+    assert elapsed > 15, "the throttle was applied, pip waited through its read timeout"
+    assert elapsed < 120, "the install took about the throttled transfer time, not several timeouts"
+    wheels = [r for r in relay.since(mark, file=True) if not r.path.endswith(".metadata")]
+    assert len(wheels) == 1, "the wheel was requested exactly once: no retry storm"
+    assert sizes.get(wheels[0].path.rsplit("/", 1)[-1]) > 1_000_000, \
+        "the wheel pip chose is big enough for the test to mean something"

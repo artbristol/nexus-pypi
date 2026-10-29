@@ -32,12 +32,23 @@ def nexus():
                  password)
 
 
+_relay = None
+
+
 @pytest.fixture(scope="session")
 def relay():
-    relay = Relay(host=os.environ.get("E2E_RELAY_HOST", "127.0.0.1"))
+    global _relay
+    _relay = relay = Relay(host=os.environ.get("E2E_RELAY_HOST", "127.0.0.1"))
     yield relay
     relay.close()
-    print("\nrelay: %d requests to pypi.org / the file host, %.1f MB" % (len(relay.requests), relay.bytes / 1e6))
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus):
+    # a print in the fixture's teardown would be swallowed by pytest's output capture on a green run
+    if _relay is not None:
+        terminalreporter.ensure_newline()
+        terminalreporter.write_line("relay: %d requests to pypi.org / the file host, %.1f MB"
+                                    % (len(_relay.requests), _relay.bytes / 1e6))
 
 
 @pytest.fixture(scope="session")
