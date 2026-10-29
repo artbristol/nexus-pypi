@@ -95,14 +95,14 @@ would against PyPI.
   PEP 700 size and upload time) are kept, so clients still verify what they download.
 * **The files** - `GET /simple/{project}/{file}` downloads the distribution file from where the
   index says it lives, checks it against the declared `sha256`, and caches it. An uncached file is
-  streamed to the client while it downloads, by one upstream download however many clients are
-  reading it; nothing a client receives is unchecked, and a file that fails the check is not cached,
-  so a clean retry re-fetches it.
+  streamed to the client while it downloads, every client reading it sharing one upstream download;
+  no client ever receives a complete file that fails the declared check, and a file that fails it
+  is not cached, so a clean retry re-fetches it.
 * **The core metadata** - `GET /simple/{project}/{file}.metadata` (PEP 658/714) is served for the
   files the index marks as having it, and checked against the hash the index declares.
-* **Caching** - index pages and the parsed file tables follow the *metadata* max age; files and
-  metadata are content-addressed and immutable, so they follow the *content* max age. Missing
-  projects and files are negatively cached.
+* **Caching** - index pages follow the *metadata* max age; files and metadata are content-addressed
+  and immutable, so they follow the *content* max age. Missing projects and files are negatively
+  cached.
 
 ## Limitations
 
