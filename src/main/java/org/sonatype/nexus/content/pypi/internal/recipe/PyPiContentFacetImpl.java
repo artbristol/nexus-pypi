@@ -7,12 +7,14 @@
 package org.sonatype.nexus.content.pypi.internal.recipe;
 
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.Optional;
 
 import javax.annotation.Nullable;
 
 import org.sonatype.nexus.content.pypi.PyPiContentFacet;
 import org.sonatype.nexus.repository.InvalidContentException;
+import org.sonatype.nexus.repository.cache.CacheInfo;
 import org.sonatype.nexus.repository.content.facet.ContentFacetSupport;
 import org.sonatype.nexus.repository.content.fluent.FluentAsset;
 import org.sonatype.nexus.repository.content.fluent.FluentComponent;
@@ -22,8 +24,10 @@ import org.sonatype.nexus.repository.pypi.PyPiPaths.FileRef;
 import org.sonatype.nexus.repository.pypi.internal.PyPiFormat;
 import org.sonatype.nexus.repository.view.Content;
 import org.sonatype.nexus.repository.view.Payload;
+import org.sonatype.nexus.repository.view.payloads.BytesPayload;
 import org.sonatype.nexus.repository.view.payloads.TempBlob;
 
+import org.joda.time.DateTime;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.config.ConfigurableBeanFactory;
@@ -83,6 +87,30 @@ public class PyPiContentFacetImpl
         .component(component)
         .blob(blob)
         .save();
+  }
+
+  @Override
+  public Content putFile(
+      final FileRef file,
+      final Path path,
+      @Nullable final String contentType,
+      final CacheInfo cacheInfo,
+      @Nullable final String etag,
+      @Nullable final DateTime lastModified) throws IOException
+  {
+    try (TempBlob blob = blobs().ingest(path, contentType, HASHING, false)) {
+      // the bytes are verified by the streaming download that produced them; this records the cache details and the
+      // upstream content headers with the asset, as storing from the upstream payload does
+      Content cached = new Content(new BytesPayload(new byte[0], contentType));
+      cached.getAttributes().set(CacheInfo.class, cacheInfo);
+      if (etag != null) {
+        cached.getAttributes().set(Content.CONTENT_ETAG, etag);
+      }
+      if (lastModified != null) {
+        cached.getAttributes().set(Content.CONTENT_LAST_MODIFIED, lastModified);
+      }
+      return saveFile(file, blob).markAsCached(cached).download();
+    }
   }
 
   @Override

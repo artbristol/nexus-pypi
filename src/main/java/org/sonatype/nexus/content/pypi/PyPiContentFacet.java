@@ -7,18 +7,21 @@
 package org.sonatype.nexus.content.pypi;
 
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.Optional;
 
 import javax.annotation.Nullable;
 
 import org.sonatype.nexus.common.hash.HashAlgorithm;
 import org.sonatype.nexus.repository.Facet;
+import org.sonatype.nexus.repository.cache.CacheInfo;
 import org.sonatype.nexus.repository.content.facet.ContentFacet;
 import org.sonatype.nexus.repository.pypi.PyPiPaths.FileRef;
 import org.sonatype.nexus.repository.view.Content;
 import org.sonatype.nexus.repository.view.Payload;
 
 import com.google.common.collect.ImmutableList;
+import org.joda.time.DateTime;
 
 import static org.sonatype.nexus.common.hash.HashAlgorithm.MD5;
 import static org.sonatype.nexus.common.hash.HashAlgorithm.SHA1;
@@ -64,6 +67,23 @@ public interface PyPiContentFacet
    * @throws org.sonatype.nexus.repository.InvalidContentException if the content does not match the declared hash
    */
   Content putFile(FileRef file, Payload content, @Nullable String expectedSha256) throws IOException;
+
+  /**
+   * Stores a distribution file from a local file, which may be hard-linked into the blob store, as an asset of the
+   * component for its project and version. The streaming download that produced the file has already checked it
+   * against the hash the index declared for it, so it is not checked again here.
+   *
+   * @param cacheInfo the cache details to record, as captured when the download started
+   * @param etag the upstream ETag of the file, or null if it sent none
+   * @param lastModified the upstream Last-Modified of the file, or null if it sent none
+   */
+  Content putFile(
+      FileRef file,
+      Path path,
+      @Nullable String contentType,
+      CacheInfo cacheInfo,
+      @Nullable String etag,
+      @Nullable DateTime lastModified) throws IOException;
 
   /**
    * Stores a file's core metadata (PEP 658/714) after checking it against the hash the index declared for it, when there
