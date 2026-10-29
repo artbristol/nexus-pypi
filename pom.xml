@@ -14,7 +14,7 @@
 
   <groupId>io.github.artbristol</groupId>
   <artifactId>nexus-repository-pypi</artifactId>
-  <version>0.1.0</version>
+  <version>0.2.0</version>
   <name>PyPI proxy for Nexus Repository Core</name>
   <url>https://github.com/artbristol/nexus-pypi</url>
 

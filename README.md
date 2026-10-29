@@ -16,6 +16,7 @@ Each plugin release works with exactly one Nexus version:
 | Plugin | Nexus Repository Core |
 |---|---|
 | 0.1.0 | 3.97.2-02 |
+| 0.2.0 | 3.97.2-02 |
 
 ## Building
 
