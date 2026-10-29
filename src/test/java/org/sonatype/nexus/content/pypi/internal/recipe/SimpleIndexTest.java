@@ -21,7 +21,8 @@ import static org.junit.Assert.assertTrue;
 
 /**
  * Against the shape of pypi.org's Simple API output: PEP 503 HTML (with PEP 658/714 data attributes) and PEP 691 JSON
- * (with PEP 700 size and upload-time).
+ * (with PEP 700 size and upload-time). The HTML tests also cover anchor forms PEP 503 allows that pypi.org happens not
+ * to emit, which other Simple API index generators do.
  */
 public class SimpleIndexTest
 {
@@ -110,6 +111,76 @@ public class SimpleIndexTest
     assertEquals("extra-1.0.tar.gz", relative.filename());
     assertEquals("https://pypi.org/simple/six/packages/extra-1.0.tar.gz", relative.url());
     assertEquals("abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", relative.sha256());
+  }
+
+  @Test
+  public void rewritesSingleQuotedHref() {
+    String html = "<a href='https://f.example/x-1.0.tar.gz' data-requires-python='&gt;=3.8'>x-1.0.tar.gz</a>";
+    SimpleIndex.Parsed parsed = SimpleIndex.parseHtml(BASE, html);
+    // a single-quoted href is rewritten exactly like a double-quoted one, into double quotes; the other attribute,
+    // still single-quoted, is passed through verbatim
+    assertEquals("<a href=\"x-1.0.tar.gz\" data-requires-python='&gt;=3.8'>x-1.0.tar.gz</a>", parsed.rewritten());
+    PyPiFileEntry file = parsed.files().get(0);
+    assertEquals("x-1.0.tar.gz", file.filename());
+    assertEquals("https://f.example/x-1.0.tar.gz", file.url());
+    assertEquals(">=3.8", file.requiresPython());
+    assertEquals(0, parsed.unparsedAnchors());
+  }
+
+  @Test
+  public void rewritesUnquotedHref() {
+    String html = "<a href=https://f.example/x-1.0.tar.gz>x-1.0.tar.gz</a>";
+    SimpleIndex.Parsed parsed = SimpleIndex.parseHtml(BASE, html);
+    assertEquals("<a href=\"x-1.0.tar.gz\">x-1.0.tar.gz</a>", parsed.rewritten());
+    PyPiFileEntry file = parsed.files().get(0);
+    assertEquals("x-1.0.tar.gz", file.filename());
+    assertEquals("https://f.example/x-1.0.tar.gz", file.url());
+    assertEquals(0, parsed.unparsedAnchors());
+  }
+
+  @Test
+  public void toleratesAnUnescapedGreaterThanInAQuotedValue() {
+    // pypi.org escapes this as &gt;, but PEP 503 does not require it
+    String html = "<a href=\"https://f.example/x-1.0.tar.gz\" data-requires-python=\">=3.8\">x-1.0.tar.gz</a>";
+    SimpleIndex.Parsed parsed = SimpleIndex.parseHtml(BASE, html);
+    // the '>' inside the quoted value does not end the tag, and the anchor stays well formed
+    assertEquals("<a href=\"x-1.0.tar.gz\" data-requires-python=\">=3.8\">x-1.0.tar.gz</a>", parsed.rewritten());
+    PyPiFileEntry file = parsed.files().get(0);
+    assertEquals("x-1.0.tar.gz", file.filename());
+    assertEquals("https://f.example/x-1.0.tar.gz", file.url());
+    assertEquals(">=3.8", file.requiresPython());
+    assertEquals(0, parsed.unparsedAnchors());
+  }
+
+  @Test
+  public void keepsBooleanAttributesWorking() {
+    String html = "<a href=\"https://f.example/x-1.0.tar.gz\" data-yanked>x-1.0.tar.gz</a>";
+    SimpleIndex.Parsed parsed = SimpleIndex.parseHtml(BASE, html);
+    assertEquals("<a href=\"x-1.0.tar.gz\" data-yanked>x-1.0.tar.gz</a>", parsed.rewritten());
+    PyPiFileEntry file = parsed.files().get(0);
+    assertEquals("x-1.0.tar.gz", file.filename());
+    assertEquals("https://f.example/x-1.0.tar.gz", file.url());
+    // a bare data-yanked carries no reason; only data-yanked="reason" marks the file yanked
+    assertFalse(file.yanked());
+    assertEquals(0, parsed.unparsedAnchors());
+  }
+
+  @Test
+  public void countsAnchorsTooMalformedToParse() {
+    String html = "<a>x-1.0.tar.gz</a>\n"
+        + "<a href=\"https://f.example/y-1.0.tar.gz\">y-1.0.tar.gz</a>\n"
+        + "<a name=x>z-1.0.tar.gz</a>\n"
+        + "<a href=\"https://f.example/truncated-1.0.tar.gz";
+    SimpleIndex.Parsed parsed = SimpleIndex.parseHtml(BASE, html);
+    assertEquals(3, parsed.unparsedAnchors());
+    // the malformed anchors are untouched, the well-formed one is still rewritten
+    assertTrue(parsed.rewritten(), parsed.rewritten().contains("<a>x-1.0.tar.gz</a>"));
+    assertTrue(parsed.rewritten(), parsed.rewritten().contains("<a name=x>z-1.0.tar.gz</a>"));
+    assertTrue(parsed.rewritten(), parsed.rewritten().contains("<a href=\"y-1.0.tar.gz\">y-1.0.tar.gz</a>"));
+    assertFalse(parsed.rewritten(), parsed.rewritten().contains("href=\"https://f.example/y"));
+    assertEquals(1, parsed.files().size());
+    assertEquals("y-1.0.tar.gz", parsed.files().get(0).filename());
+    assertEquals("https://f.example/y-1.0.tar.gz", parsed.files().get(0).url());
   }
 
   @Test
