@@ -20,9 +20,9 @@ CI runs `mvn verify` on every push and pull request, one run at a time.
 
 The unit tests cover what can be checked without a running Nexus, against something independent
 where possible: the shape of pypi.org's Simple API output (PEP 503 HTML and PEP 691 JSON), real
-Nexus MIME detection for the content types the proxy produces, and the PEP 503 name normalisation
-and PEP 427/376 file-name grammar. Everything else is covered by the [end-to-end
-tests](#end-to-end-tests).
+Nexus MIME detection for the content types the proxy produces, the PEP 503 name normalisation and
+PEP 427/376 file-name grammar, and what a streaming file download releases to its readers, and
+when. Everything else is covered by the [end-to-end tests](#end-to-end-tests).
 
 * The versions of the Nexus components, and of the libraries Nexus ships, come from Nexus'
   `nexus-common-components-formats-parent`, imported as a BOM (from Maven Central; no nexus-public
@@ -64,6 +64,10 @@ REST endpoint `/v1/repositories/pypi/proxy` is provided by this plugin.
 the Simple API root - the value of pip's `--index-url` - and a project's page is that root's path
 plus `/{project}/`.
 
+Index requests go through the proxy machinery (cache, staleness, cooperation). A file request first
+resolves the file table (below), then serves the file from the cache or, if it is not cached yet,
+streams it while it downloads (see [Files and metadata](#files-and-metadata)).
+
 Nothing but `/simple/...` is proxied (anything else is 404): in particular PyPI's other endpoints
 (the JSON API at `pypi.org/pypi/...`, `pypi.org/project/...`) are not.
 
@@ -83,16 +87,30 @@ things:
 
 The index is served in the flavour the client asked for (PEP 691 JSON when `Accept` includes
 `application/vnd.pypi.simple.v1+json`, HTML otherwise) and cached; the file table is cached too.
-Both follow the *metadata* max age, since an index can change.
+Both follow the *metadata* max age, since an index can change. Each flavour is fetched separately
+and keeps the ETag and Last-Modified the remote sent with it, so a stale index is revalidated with
+`If-None-Match`/`If-Modified-Since` rather than fetched again.
 
 ### Files and metadata
 
 A file request looks the file up in the table. If the project has no table yet, the index is
 fetched to build it (an unknown project yields an empty table, so the request is 404 and negatively
-cached). The file is then downloaded from where the table says it lives, **checked against the
-`sha256` the index declared for it**, and cached. A file that does not match its declared hash is
-rejected (Nexus answers a failed `GET` with 404, so a group can fall through) and not cached, so a
-clean retry re-fetches it.
+cached).
+
+A file that is not cached yet is downloaded from where the table says it lives and **streamed to
+the client while it downloads** (`StreamingDownload`): the body is written to a temporary file, of
+which every chunk but the most recent one is released to the reading clients as the next one
+arrives, and the last one only once the whole body has been checked - against the `sha256` the
+index declared for the file, and against its declared size when the index declares one. No client
+therefore ever receives a complete but corrupt file; when the index declares neither hash nor size
+there is nothing to check the body against, and it is accepted as it arrives. A response is only
+started for a download that has released its first chunk: one that fails earlier is answered with a
+status (404 for content that does not match the index, 502 for a failed transfer) instead of a
+broken transfer. Concurrent requests for the same file share one upstream download, which is
+checked and stored as usual even if its clients go away. A file that does not match its declared
+hash, or a body that is dropped or truncated, fails the download for every client reading it and is
+not cached (Nexus answers the failed `GET` with 404 or 502, so a group can fall through), so a
+clean retry re-fetches it. A `HEAD` never downloads.
 
 A `.metadata` request (PEP 658/714) is served only for the files the index marks as having core
 metadata, downloaded from the file URL plus `.metadata` and checked against the hash the index
@@ -121,8 +139,6 @@ for the index and table, alongside the file for the metadata).
 ## Not supported (yet)
 
 * Hosted and group repositories; uploads.
-* Streaming: a file is fully downloaded and hash-checked before it is cached or served. Fine for
-  the small packages `pip` usually fetches, but a multi-GB wheel would wait for the whole download.
 * PyPI endpoints other than the Simple API.
 * Search customisation (assets are indexed by the default SQL search).
 
