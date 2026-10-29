@@ -129,11 +129,11 @@ public final class SimpleIndex
           resolve(base, urlPart),
           hashes,
           unescape(attribute(attrs, "data-requires-python")),
-          attribute(attrs, "data-yanked") != null,
+          hasAttribute(attrs, "data-yanked"),
           attribute(attrs, "data-yanked"),
           null,
           null,
-          attribute(attrs, "data-core-metadata") != null || attribute(attrs, "data-dist-info-metadata") != null,
+          hasAttribute(attrs, "data-core-metadata") || hasAttribute(attrs, "data-dist-info-metadata"),
           coreMetadataSha256Of(attrs),
           unescape(attribute(attrs, "data-provenance"))));
       String newHref = filename + (fragment == null ? "" : "#" + fragment);
@@ -346,6 +346,20 @@ public final class SimpleIndex
       }
     }
     return null;
+  }
+
+  /**
+   * Whether the tag carries the named attribute at all, with or without a value: PEP 592 and PEP 714 mark a file
+   * yanked and its core metadata available by the presence of the attribute, whose value, when there is one, says why
+   * or carries the hash.
+   */
+  private static boolean hasAttribute(final List<Attribute> attrs, final String name) {
+    for (Attribute attr : attrs) {
+      if (attr.name().equals(name)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**

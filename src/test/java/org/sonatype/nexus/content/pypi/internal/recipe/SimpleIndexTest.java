@@ -153,16 +153,27 @@ public class SimpleIndexTest
   }
 
   @Test
-  public void keepsBooleanAttributesWorking() {
-    String html = "<a href=\"https://f.example/x-1.0.tar.gz\" data-yanked>x-1.0.tar.gz</a>";
+  public void bareAttributesMeanWhatThePepsSay() {
+    String html = "<a href=\"https://f.example/x-1.0.tar.gz#sha256=abcdef0123456789\" data-yanked data-core-metadata>x-1.0.tar.gz</a>";
     SimpleIndex.Parsed parsed = SimpleIndex.parseHtml(BASE, html);
-    assertEquals("<a href=\"x-1.0.tar.gz\" data-yanked>x-1.0.tar.gz</a>", parsed.rewritten());
+    assertEquals("<a href=\"x-1.0.tar.gz#sha256=abcdef0123456789\" data-yanked data-core-metadata>x-1.0.tar.gz</a>",
+        parsed.rewritten());
     PyPiFileEntry file = parsed.files().get(0);
-    assertEquals("x-1.0.tar.gz", file.filename());
-    assertEquals("https://f.example/x-1.0.tar.gz", file.url());
-    // a bare data-yanked carries no reason; only data-yanked="reason" marks the file yanked
-    assertFalse(file.yanked());
+    // PEP 592: the presence of data-yanked marks the file yanked; its value, when there is one, is the reason
+    assertTrue(file.yanked());
+    assertNull(file.yankReason());
+    // PEP 714: the presence of data-core-metadata marks the core metadata as available; its value, when there is
+    // one, carries the hash
+    assertTrue(file.coreMetadata());
+    assertNull(file.coreMetadataSha256());
     assertEquals(0, parsed.unparsedAnchors());
+
+    String withValues = "<a href=\"https://f.example/y-1.0.tar.gz\" data-yanked=\"superseded\" data-core-metadata=\"sha256=cafe\">y-1.0.tar.gz</a>";
+    PyPiFileEntry valued = SimpleIndex.parseHtml(BASE, withValues).files().get(0);
+    assertTrue(valued.yanked());
+    assertEquals("superseded", valued.yankReason());
+    assertTrue(valued.coreMetadata());
+    assertEquals("cafe", valued.coreMetadataSha256());
   }
 
   @Test
