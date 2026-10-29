@@ -377,9 +377,15 @@ public class PyPiProxyFacet
       }
       download.download(entity.getContent());
       complete = true;
-      content().putFile(file, download.file(), APPLICATION_OCTET_STREAM, cacheInfo,
-          download.etag(), download.lastModified());
-      log.debug("Downloaded and stored {} in {}", file.assetPath(), getRepository().getName());
+      try {
+        content().putFile(file, download.file(), APPLICATION_OCTET_STREAM, cacheInfo,
+            download.etag(), download.lastModified());
+        log.debug("Downloaded and stored {} in {}", file.assetPath(), getRepository().getName());
+      }
+      finally {
+        // the bytes are verified; clients finish even if storing failed and the file is not cached
+        download.finish();
+      }
     }
     catch (Exception e) {
       download.fail(e instanceof IOException io ? io : e);

@@ -230,6 +230,33 @@ public class StreamingDownloadTest
     assertArrayEquals(Arrays.copyOf(content, content.length / 2), readAll(underTest));
   }
 
+  @Test
+  public void theTailIsOnlyReleasedOnceTheFileIsStored() throws Exception {
+    byte[] content = content(1);
+    StreamingDownload underTest = download(sha256(content), (long) content.length);
+    AtomicReference<Exception> failure = runDownload(underTest, upstream(content), false);
+    join(downloader);
+    assertNull(failure.get());
+    assertFalse("the tail is held until the file is stored", underTest.isComplete());
+
+    AtomicReference<byte[]> read = new AtomicReference<>();
+    Thread reader = new Thread(() -> {
+      try {
+        read.set(readAll(underTest));
+      }
+      catch (IOException e) {
+        // the final assertion fails instead
+      }
+    });
+    reader.start();
+    reader.join(300);
+    assertTrue("a reader waits for the file to be stored", reader.isAlive());
+
+    underTest.finish();
+    join(reader);
+    assertArrayEquals(content, read.get());
+  }
+
   // helpers
 
   private StreamingDownload download(final String sha256, final Long size) throws IOException {
@@ -240,10 +267,24 @@ public class StreamingDownloadTest
   }
 
   private AtomicReference<Exception> runDownload(final StreamingDownload download, final InputStream upstream) {
+    return runDownload(download, upstream, true);
+  }
+
+  /**
+   * Runs the download as the facet does: the tail is only released by {@code finish} once the file has been stored.
+   */
+  private AtomicReference<Exception> runDownload(
+      final StreamingDownload download,
+      final InputStream upstream,
+      final boolean finish)
+  {
     AtomicReference<Exception> failure = new AtomicReference<>();
     downloader = new Thread(() -> {
       try {
         download.download(upstream);
+        if (finish) {
+          download.finish();
+        }
       }
       catch (Exception e) {
         failure.set(e);

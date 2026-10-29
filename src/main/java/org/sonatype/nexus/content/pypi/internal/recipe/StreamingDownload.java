@@ -33,8 +33,10 @@ import static java.util.Objects.requireNonNull;
  *
  * Bytes are only released to readers once they are known to be good: the most recently written chunk is held back
  * until the next one arrives, and the last one until the whole body has been checked against the size and the sha256
- * the index declared for the file. A reader therefore never sees a complete but corrupt file; if the body ends early
- * or does not match what the index declared, the download fails and every reader fails with it, and nothing is stored.
+ * the index declared for the file and the file has been stored. A reader therefore never sees a complete but corrupt
+ * file, and one that reads to the end finds the file in the repository, so the request that follows its download does
+ * not need the upstream again. If the body ends early or does not match what the index declared, the download fails
+ * and every reader fails with it, and nothing is stored.
  * When the index declares no hash and no size there is nothing to check the body against, and it is accepted as it
  * arrives.
  */
@@ -84,6 +86,11 @@ final class StreamingDownload
   // guarded by lock
   private long released;
 
+  /**
+   * The size of the body, set once it has been fully received and verified; released by {@link #finish()}.
+   */
+  private long total;
+
   private boolean complete;
 
   private Exception failure;
@@ -121,8 +128,9 @@ final class StreamingDownload
   }
 
   /**
-   * Copies the upstream body into the file, releasing bytes to readers as they are verified. A transport failure or a
-   * body that does not match what the index declared fails the download for good; readers fail too.
+   * Copies the upstream body into the file, releasing bytes to readers as they are verified, except for the tail,
+   * which {@link #finish()} releases. A transport failure or a body that does not match what the index declared fails
+   * the download for good; readers fail too.
    *
    * @throws IOException if the download failed; readers fail with the same failure
    */
@@ -154,15 +162,25 @@ final class StreamingDownload
         closeQuietly(upstream);
       }
       verify(written, digest);
-      synchronized (lock) {
-        released = written;
-        complete = true;
-        lock.notifyAll();
-      }
+      total = written;
     }
     catch (IOException | RuntimeException e) {
       fail(e);
       throw e;
+    }
+  }
+
+  /**
+   * Releases the tail and completes the download, once the file has been stored: a client that reads to the end must
+   * find the file in the repository, or the request that follows its download would fetch it from upstream again. The
+   * bytes are verified by then; a failure to store them only means the file is not cached, so the clients still
+   * receive the complete file.
+   */
+  void finish() {
+    synchronized (lock) {
+      released = total;
+      complete = true;
+      lock.notifyAll();
     }
   }
 
