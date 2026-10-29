@@ -85,14 +85,19 @@ public class PyPiPathsTest
   }
 
   /**
-   * The remote URL is the Simple API root (pip's --index-url); a project's page is its path plus /{project}/.
+   * The Simple API root is the remote URL plus the index path, as the UI's repository form describes them: pypi.org
+   * serves its index under /simple, pypi.nvidia.com and pypi.fury.io at the root of their URL.
    */
   @Test
   public void indexUpstreamPaths() {
-    assertEquals("/simple/requests/", PyPiPaths.indexUpstreamPath("/simple", "requests"));
-    assertEquals("/simple/requests/", PyPiPaths.indexUpstreamPath("/simple/", "requests"));
-    assertEquals("/requests/", PyPiPaths.indexUpstreamPath("/", "requests"));
-    assertEquals("/requests/", PyPiPaths.indexUpstreamPath("", "requests"));
-    assertEquals("/pypi/requests/", PyPiPaths.indexUpstreamPath("/pypi", "requests"));
+    assertEquals("/simple/requests/", PyPiPaths.indexUpstreamPath("/", "/simple", "requests"));
+    assertEquals("/simple/requests/", PyPiPaths.indexUpstreamPath("", "/simple", "requests"));
+    assertEquals("/simple/requests/", PyPiPaths.indexUpstreamPath("/", "/simple/", "requests"));
+    assertEquals("/simple/requests/", PyPiPaths.indexUpstreamPath("/", "simple", "requests"));
+    assertEquals("/requests/", PyPiPaths.indexUpstreamPath("/", "", "requests"));
+    assertEquals("/requests/", PyPiPaths.indexUpstreamPath("/", null, "requests"));
+    assertEquals("/someuser/requests/", PyPiPaths.indexUpstreamPath("/someuser/", "", "requests"));
+    assertEquals("/someuser/requests/", PyPiPaths.indexUpstreamPath("/someuser", "", "requests"));
+    assertEquals("/mirror/simple/requests/", PyPiPaths.indexUpstreamPath("/mirror/", "/simple", "requests"));
   }
 }

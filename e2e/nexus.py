@@ -29,24 +29,27 @@ class Nexus:
         except urllib.error.HTTPError as e:
             raise AssertionError("%s %s -> %d %s" % (method, path, e.code, e.read()[:300])) from None
 
-    def create_proxy(self, name, remote_url, metadata_max_age=1440, auto_block=False, timeout=None, blocked=False):
+    def create_proxy(self, name, remote_url, metadata_max_age=1440, auto_block=False, timeout=None, blocked=False,
+                     index_path=None):
         http_client = {"blocked": blocked, "autoBlock": auto_block}
         if timeout is not None:
             # retries: 0 so that a failure costs the upstream one request, not several
             http_client["connection"] = {"timeout": timeout, "retries": 0}
         self.call("POST", "/service/rest/v1/repositories/pypi/proxy",
-                  self._proxy_body(name, remote_url, metadata_max_age, http_client))
+                  self._proxy_body(name, remote_url, metadata_max_age, http_client, index_path))
 
-    def update_proxy(self, name, remote_url, metadata_max_age=1440, auto_block=False, blocked=False):
+    def update_proxy(self, name, remote_url, metadata_max_age=1440, auto_block=False, blocked=False, index_path=None):
         self.call("PUT", "/service/rest/v1/repositories/pypi/proxy/" + name,
-                  self._proxy_body(name, remote_url, metadata_max_age, {"blocked": blocked, "autoBlock": auto_block}))
+                  self._proxy_body(name, remote_url, metadata_max_age, {"blocked": blocked, "autoBlock": auto_block},
+                                   index_path))
 
     def proxy(self, name):
         return self.call("GET", "/service/rest/v1/repositories/pypi/proxy/" + name)
 
     @staticmethod
-    def _proxy_body(name, remote_url, metadata_max_age, http_client):
-        return {
+    def _proxy_body(name, remote_url, metadata_max_age, http_client, index_path=None):
+        # without a pypi section the index path is /simple, as the UI's repository form defaults it
+        body = {
             "name": name,
             "online": True,
             "storage": {"blobStoreName": "default", "strictContentTypeValidation": True},
@@ -54,6 +57,9 @@ class Nexus:
             "negativeCache": {"enabled": True, "timeToLive": 1440},
             "httpClient": http_client,
         }
+        if index_path is not None:
+            body["pypi"] = {"indexPath": index_path}
+        return body
 
     def delete_repository(self, name):
         self.call("DELETE", "/service/rest/v1/repositories/" + name)

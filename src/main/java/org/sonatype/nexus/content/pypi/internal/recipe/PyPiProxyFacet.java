@@ -28,6 +28,8 @@ import org.sonatype.nexus.repository.ETagHeaderUtils;
 import org.sonatype.nexus.repository.MissingBlobException;
 import org.sonatype.nexus.repository.cache.CacheController;
 import org.sonatype.nexus.repository.cache.CacheInfo;
+import org.sonatype.nexus.repository.config.Configuration;
+import org.sonatype.nexus.repository.config.ConfigurationFacet;
 import org.sonatype.nexus.repository.content.facet.ContentProxyFacetSupport;
 import org.sonatype.nexus.repository.http.HttpMethods;
 import org.sonatype.nexus.repository.httpclient.HttpClientFacet;
@@ -56,6 +58,7 @@ import org.apache.http.client.utils.DateUtils;
 import org.apache.http.client.utils.HttpClientUtils;
 import org.joda.time.DateTime;
 import jakarta.validation.ValidationException;
+import jakarta.validation.constraints.Pattern;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.config.ConfigurableBeanFactory;
 import org.springframework.context.annotation.Scope;
@@ -71,6 +74,8 @@ import static org.sonatype.nexus.repository.view.ContentTypes.APPLICATION_OCTET_
 
 /**
  * PyPI proxy facet.
+ *
+ * The Simple API root of the remote is the remote URL plus the remote index path (see {@link Config}).
  *
  * A project's index page (PEP 503 HTML, or PEP 691 JSON when the client asks for it) is fetched from the remote, its
  * file links are rewritten to point back at this repository, and it is cached; the files it describes are also parsed
@@ -93,6 +98,26 @@ public class PyPiProxyFacet
   private static final String HTML_ACCEPT = "text/html";
 
   private static final String JSON = "application/json";
+
+  /**
+   * The configuration section of the PyPI settings, as the repository form of the UI saves them.
+   */
+  public static final String CONFIG_KEY = "pypi";
+
+  /**
+   * The PyPI settings of a proxy repository.
+   */
+  public static class Config
+  {
+    /**
+     * Path of the Simple API under the remote URL: {@code /simple} for pypi.org and the indexes laid out like it, or
+     * empty for an index served at the root of its remote URL. The UI allows only these two.
+     */
+    @Pattern(regexp = "^(/simple/?)?$", message = "Index path must be \"/simple\" (standard) or empty (root path)")
+    public String indexPath = PyPiPaths.DEFAULT_INDEX_PATH;
+  }
+
+  private Config pypiConfig;
 
   private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -458,7 +483,7 @@ public class PyPiProxyFacet
   protected String getUrl(final Context context) {
     Target target = target(context);
     if (target.kind() == Kind.INDEX) {
-      return PyPiPaths.indexUpstreamPath(getRemoteUrl().getPath(), target.project());
+      return indexUpstreamPath(target.project());
     }
     return requireNonNull(target.upstreamUrl());
   }
@@ -498,7 +523,7 @@ public class PyPiProxyFacet
    * with a status but not negatively cached, as an index request through the regular proxy path would be.
    */
   private List<PyPiFileEntry> fetchFileTable(final String project, final Context context) throws IOException {
-    URI uri = getRemoteUrl().resolve(PyPiPaths.indexUpstreamPath(getRemoteUrl().getPath(), project));
+    URI uri = getRemoteUrl().resolve(indexUpstreamPath(project));
     validateRemoteHost(uri);
     HttpClient client = facet(HttpClientFacet.class).getHttpClient();
     HttpGet request = new HttpGet(uri);
@@ -590,6 +615,10 @@ public class PyPiProxyFacet
     }
   }
 
+  private String indexUpstreamPath(final String project) {
+    return PyPiPaths.indexUpstreamPath(getRemoteUrl().getPath(), pypiConfig.indexPath, project);
+  }
+
   private CacheController metadataCacheController() {
     return cacheControllerHolder.getMetadataCacheController();
   }
@@ -633,6 +662,18 @@ public class PyPiProxyFacet
   @Override
   protected boolean shouldSkipStoreForHead() {
     return true;
+  }
+
+  @Override
+  protected void doValidate(final Configuration configuration) throws Exception {
+    super.doValidate(configuration);
+    facet(ConfigurationFacet.class).validateSection(configuration, CONFIG_KEY, Config.class);
+  }
+
+  @Override
+  protected void doConfigure(final Configuration configuration) throws Exception {
+    super.doConfigure(configuration);
+    pypiConfig = facet(ConfigurationFacet.class).readSection(configuration, CONFIG_KEY, Config.class);
   }
 
   @Override

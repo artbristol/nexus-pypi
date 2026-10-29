@@ -101,7 +101,8 @@ def repository(nexus, relay, relay_allowed, anonymous_access, request):
     marker = request.node.get_closest_marker("repo")
     options = dict(marker.kwargs) if marker else {}
     name = "e2e-%s" % uuid.uuid4().hex[:8]
-    nexus.create_proxy(name, relay.base_url + "simple", **options)
+    # the remote URL is the root of the relay, which stands for https://pypi.org; the index path is /simple
+    nexus.create_proxy(name, relay.base_url, **options)
     yield Repository(nexus, name)
     try:
         nexus.delete_repository(name)
