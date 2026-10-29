@@ -74,8 +74,9 @@ or, for the whole session,
 export PIP_INDEX_URL=http://localhost:8081/repository/pypi-proxy/simple
 ```
 
-`uv` and `Poetry` take the same URL as their index. Clients authenticate to Nexus, not to PyPI:
-either allow anonymous read access to the repository, or put Nexus credentials into the URL:
+`uv` and `Poetry` take the same URL as their index. Clients authenticate to Nexus, not to PyPI: a new
+Nexus has anonymous access disabled, so the first request is answered 401 until you either allow anonymous
+read access (*Administration → Security → Anonymous*) or put Nexus credentials into the URL:
 
 ```sh
 pip install --index-url http://user:password@localhost:8081/repository/pypi-proxy/simple requests
@@ -103,7 +104,8 @@ would against PyPI.
 
 * Proxy repositories only: no hosted or group repositories, no uploads.
 * The Simple API is proxied only; PyPI's other endpoints (the JSON API, `pypi.org/project/...`)
-  are not.
+  are not. Nor is the root of the index (`GET /simple/`, the list of all projects): clients always
+  request a project's page, `/simple/{project}/`.
 * Downloading is not streamed; a file is fully fetched and hash-checked before it is cached or
   served.
 

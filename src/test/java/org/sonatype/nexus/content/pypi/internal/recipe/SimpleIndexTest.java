@@ -70,7 +70,7 @@ public class SimpleIndexTest
     String rewritten = parsed.rewritten();
     // the file links are relative to the project page, with the hash fragment kept for the client to verify
     assertTrue(rewritten, rewritten.contains(
-        "href=\"six-1.16.0-py2.py3-none-any.whl#sha256=8abb2f1d86890a27b58d66095a12d102acafa81495c3a074c7e862466c84b62f\""));
+        "<a href=\"six-1.16.0-py2.py3-none-any.whl#sha256=8abb2f1d86890a27b58d66095a12d102acafa81495c3a074c7e862466c84b62f\""));
     assertTrue(rewritten, rewritten.contains("href=\"six-1.16.0.tar.gz#sha256=1e61c37477a1626458e36f7b1d82aa5c9b094fa4802892072e49de9c60c4c926\""));
     assertTrue(rewritten, rewritten.contains("href=\"extra-1.0.tar.gz#sha256=abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789\""));
     // the file host no longer appears in any link

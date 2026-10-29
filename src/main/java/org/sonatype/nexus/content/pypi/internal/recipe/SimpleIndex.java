@@ -96,7 +96,7 @@ public final class SimpleIndex
             coreMetadataSha256Of(attrs),
             unescape(attribute(attrs, "data-provenance"))));
         String newHref = filename + (fragment == null ? "" : "#" + fragment);
-        out.append("<a ").append(replaceAttribute(attrs, "href", newHref)).append('>').append(text).append("</a>");
+        out.append("<a").append(replaceAttribute(attrs, "href", newHref)).append('>').append(text).append("</a>");
       }
       last = matcher.end();
     }
