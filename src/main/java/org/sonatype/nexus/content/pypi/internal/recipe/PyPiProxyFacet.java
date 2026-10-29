@@ -436,6 +436,11 @@ public class PyPiProxyFacet
     if (cacheInfo != null) {
       rewritten.getAttributes().set(CacheInfo.class, cacheInfo);
     }
+    // the upstream validators, so that revalidation sends If-None-Match/If-Modified-Since instead of fetching the
+    // whole index again. Each flavour is fetched separately, and carries its own.
+    rewritten.getAttributes().set(Content.CONTENT_ETAG, upstream.getAttributes().get(Content.CONTENT_ETAG));
+    rewritten.getAttributes()
+        .set(Content.CONTENT_LAST_MODIFIED, upstream.getAttributes().get(Content.CONTENT_LAST_MODIFIED));
     return rewritten;
   }
 
@@ -500,7 +505,7 @@ public class PyPiProxyFacet
       }
       SimpleIndex.Parsed parsed = SimpleIndex.parseHtml(uri.toString(), body);
       storeFileTable(project, parsed.files());
-      storeIndex(project, false, parsed.rewritten());
+      storeIndex(project, false, parsed.rewritten(), etagOf(response), lastModifiedOf(response));
       return parsed.files();
     }
     finally {
@@ -515,9 +520,23 @@ public class PyPiProxyFacet
     content().putAsset(PyPiPaths.fileTableAssetPath(project), FILE_TABLE_KIND, table);
   }
 
-  private void storeIndex(final String project, final boolean json, final String rewritten) throws IOException {
+  private void storeIndex(
+      final String project,
+      final boolean json,
+      final String rewritten,
+      @Nullable final String etag,
+      @Nullable final DateTime lastModified) throws IOException
+  {
     Content index = new Content(new BytesPayload(rewritten.getBytes(StandardCharsets.UTF_8), json ? INDEX_JSON : INDEX_HTML));
     index.getAttributes().set(CacheInfo.class, metadataCacheController().current());
+    // the upstream validators, so that revalidation sends If-None-Match/If-Modified-Since instead of fetching the
+    // whole index again
+    if (etag != null) {
+      index.getAttributes().set(Content.CONTENT_ETAG, etag);
+    }
+    if (lastModified != null) {
+      index.getAttributes().set(Content.CONTENT_LAST_MODIFIED, lastModified);
+    }
     content().putAsset(PyPiPaths.indexAssetPath(project, json), INDEX_KIND, index);
   }
 
