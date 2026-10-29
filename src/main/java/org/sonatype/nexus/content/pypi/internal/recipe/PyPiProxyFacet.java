@@ -484,7 +484,8 @@ public class PyPiProxyFacet
   /**
    * Fetches the project's index page directly and builds its file table, storing the table (and the rewritten index
    * page, so a following index request is served from the cache). An unknown project yields an empty table, so the
-   * request is answered 404 and negatively cached.
+   * request is answered 404 and negatively cached; any other failed response fails the request, which is answered
+   * with a status but not negatively cached, as an index request through the regular proxy path would be.
    */
   private List<PyPiFileEntry> fetchFileTable(final String project, final Context context) throws IOException {
     URI uri = getRemoteUrl().resolve(PyPiPaths.indexUpstreamPath(getRemoteUrl().getPath(), project));
@@ -495,9 +496,14 @@ public class PyPiProxyFacet
     HttpResponse response = execute(context, client, request);
     try {
       int status = response.getStatusLine().getStatusCode();
+      if (status == HttpStatus.SC_NOT_FOUND) {
+        log.debug("Upstream answered 404 for {}; no such project", uri);
+        return List.of();
+      }
       if (status != HttpStatus.SC_OK) {
         log.debug("Upstream answered {} for {}", status, uri);
-        return List.of();
+        mayThrowProxyServiceException(response); // 401/402/407/5xx, as the index request itself would be
+        throw new IOException("Upstream answered " + status + " for " + uri);
       }
       String body;
       try (InputStream in = response.getEntity().getContent()) {
